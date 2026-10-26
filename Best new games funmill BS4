@@ -1,0 +1,76 @@
+import requests
+from bs4 import BeautifulSoup
+from zipfile import ZipFile
+from datetime import datetime
+import os
+import pandas as pd
+import numpy as np
+import re
+
+
+pd.set_option('display.max_columns', None)
+pd.set_option('display.width', 1000)
+pd.set_option('display.max_colwidth', 80)
+
+path = r'E:\new\BGG'
+os.chdir(path)
+
+def funmill_not_found(game_name):
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "ru-RU,ru;q=0.9",
+            "Connection": "close"
+            }
+        top_words = '+'.join(sorted(game_name.split('-'), key=len)[-3:])
+        r = requests.get(f'https://funmill.ru/search/', headers=headers, params={'q': top_words})
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, 'html.parser')
+        search_block = soup.find_all('div', class_='product-item-container')
+        results = []
+        for block in search_block:
+            link = block.find('div', class_='product-item-title').find('a').get('href')
+            results.append(link[7:-1].lower().split('-'))
+        resembl = lambda x: (len(set(x) & set(game_name.lower().split('-'))), -len(set(x)))
+        print(f'По игре {game_name} нашлись такие результаты: {results}. \nДобавлено как наиболее вероятное:{sorted(results, key=resembl)[-1]}')
+        return '-'.join(sorted(results, key=resembl)[-1])
+    except Exception as e:
+        pass
+
+def funmill(game_name, flag='Yes'):
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                   "Accept": "application/json, text/plain, */*",
+                   "Accept-Language": "ru-RU,ru;q=0.9",
+                   "Connection": "close"
+            }
+    try:
+        stock = False
+        r = requests.get(f'https://funmill.ru/games/{game_name}/', headers=headers)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, 'html.parser')
+        price = soup.find(class_="fm-product-price-current").text
+        buy = soup.find('span', string='Купить')
+        if buy:
+            stock = True
+        red_marks = [tag.get_text(strip=True) for tag in soup.find_all('span', style=re.compile("color: #ff0000"))]
+        return f'https://funmill.ru/games/{game_name}/', flag, price, stock, '\n'.join(red_marks)
+    except requests.exceptions.HTTPError as e:
+        search_result = funmill_not_found(game_name)
+        if search_result:
+            return funmill(search_result, flag='Maybe')
+        return np.nan, 'No', np.nan, np.nan, np.nan
+
+df = pd.read_csv('boardgames_rank_2026-10-05.csv', delimiter=',', index_col=0)
+df = df.drop(columns=list(filter(lambda x: '_rank' in x, df.columns)))
+df = df[~df['name'].str.contains(r'\bpromo\b', case=False)] # убираем промо
+games = df[df['is_expansion'] == 0]
+
+fresh_games = games[(games['usersrated'] >= 1000) & (games['yearpublished'] > 2023) & (games['average'] > 8)].sort_values(by=['average'], ascending=False)
+
+fresh_games['url'] = fresh_games['name'].str.replace("'", '').str.replace(r'[^\w]+', '-', regex=True)
+fresh_games[['link', 'found', 'price', 'stock', 'comment']] = fresh_games.apply(lambda x: funmill(x['url']), axis=1, result_type='expand')
+fresh_games.drop(columns=['is_expansion', 'url'], inplace=True)
+fresh_games.to_csv('New games.csv')
+
+
