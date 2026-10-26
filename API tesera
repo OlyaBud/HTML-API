@@ -1,0 +1,67 @@
+import requests
+from datetime import datetime
+import os
+import pandas as pd
+import json
+import time
+import random
+
+
+def new_session():
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+               "Accept": "application/json, text/plain, */*",
+               "Accept-Language": "ru-RU,ru;q=0.9",
+               "Connection": "close"
+               }
+    s = requests.Session()
+    s.headers.update(headers)
+    return s
+
+
+def get_tesera(path, date):
+    #подгружаем текущий файл, если он есть
+    try:
+        with open(path+'/'+f'tesera_{date}.json', encoding='utf-8') as f:
+            all_games = json.load(f)
+        print(f"Бэкап загружен. Уже спаршено: {len(all_games)} игр.")
+    except FileNotFoundError:
+        all_games = []
+        print("Файл не найден, начинаем с нуля.")
+
+    session = new_session()
+    last_page_before_block = len(all_games) // 100
+
+    # Получаем новые данные с места, на котором остановились
+    for page in range(last_page_before_block, 100):
+        for attempt in range(4):
+            try:
+                r = session.get(f'https://api.tesera.ru/games?offset={page*100}&limit=100', timeout=20)
+                r.raise_for_status()
+                break
+            except Exception as e:
+                print(f"Ошибка соединения на попытке {attempt + 1}: {e}")
+                session = new_session()
+                time.sleep(5)
+        else:
+            print("Не удалось пробиться после 4 попыток")
+            break
+        if not r.json():
+            print('Последняя страница достигнута', page)
+            break
+        if page % 10 == 0:
+            session = new_session()
+        all_games.extend(r.json())
+        time.sleep(random.uniform(3.0, 6.0))
+    with open(f"tesera_{date}.json", "w+", encoding="utf-8") as f:
+        json.dump(all_games, f, ensure_ascii=False, indent=4)
+        print(f"Собрано игр: {len(all_games)}")
+    return all_games, last_page_before_block
+
+
+
+date = datetime.now().strftime('%Y-%m-%d')
+path = r'E:\new\BGG'
+os.chdir(path)
+all_games, pages = get_tesera(path, date)
+
+data = pd.read_json(f"tesera_{date}.json", encoding="utf-8")
